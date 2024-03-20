@@ -1,0 +1,13 @@
+# Config format schema number
+format_version: 1
+
+###################
+## Dataset options
+dataset_params:
+  pc_dataset_type: "SemanticKITTI_plg"
+  collate_type: "collate_fn_plg"
+  ignore_label: 0
+  label_mapping: "./config/label_mapping/semantic-kitti.yaml"
+
+  train_data_loader:
+    data_path: "../dataset/sequences/"

@@ -1,6 +1,5 @@
 import numpy as np
-from pytorch_lightning.metrics import Metric
-
+from torchmetrics import Metric
 from dataloader.pc_dataset import get_SemKITTI_label_name
 
 

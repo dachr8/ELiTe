@@ -5,9 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-from network.basic_block import Lovasz_loss
+from network.basic_block import Lovasz_loss, SparseBasicBlock
 from network.base_model import LightningBaseModel
-from network.basic_block import SparseBasicBlock
 from network.voxel_fea_generator import voxel_3d_generator, voxelization
 
 
@@ -32,7 +31,8 @@ class point_encoder(nn.Module):
         self.layer_out = nn.Sequential(
             nn.Linear(2 * out_channels, out_channels),
             nn.LeakyReLU(0.1, True),
-            nn.Linear(out_channels, out_channels))
+            nn.Linear(out_channels, out_channels)
+        )
 
     @staticmethod
     def downsample(coors, p_fea, scale=2):
@@ -62,9 +62,9 @@ class point_encoder(nn.Module):
 class SPVBlock(nn.Module):
     def __init__(self, in_channels, out_channels, indice_key, scale, last_scale, spatial_shape):
         super(SPVBlock, self).__init__()
-        self.scale = scale
         self.indice_key = indice_key
         self.layer_id = indice_key.split('_')[1]
+        self.scale = scale
         self.last_scale = last_scale
         self.spatial_shape = spatial_shape
         self.v_enc = spconv.SparseSequential(
@@ -168,7 +168,26 @@ class get_model(LightningBaseModel):
         output = torch.cat(enc_feats, dim=1)
         data_dict['logits'] = self.classifier(output)
 
-        data_dict['loss'] = 0.
+        '''
+        import os
+        dir = 'logs/tsne/penultimate/fusion'
+        os.makedirs(dir, exist_ok=True)
+        np.save(dir+'/labels', data_dict['img_label'].cpu())
+        
+        for i in range(len(self.classifier)):
+            output = self.classifier[i](output)
+            if i == 1:
+                break
+        
+        def p2img_mapping(pts_fea, p2img_idx, batch_idx):
+            img_feat = []
+            for b in range(batch_idx.max() + 1):
+                img_feat.append(pts_fea[batch_idx == b][p2img_idx[b]])
+            return torch.cat(img_feat, 0)
+        pts_fea = p2img_mapping(output[data_dict['coors_inv']], data_dict['point2img_index'], data_dict['batch_idx'])
+        np.save(dir+'/pts_fea', pts_fea.cpu())
+        '''
+
         data_dict = self.criterion(data_dict)
 
         return data_dict
@@ -195,11 +214,9 @@ class criterion(nn.Module):
         )
 
     def forward(self, data_dict):
-        loss_main_ce = self.ce_loss(data_dict['logits'], data_dict['labels'].long())
-        loss_main_lovasz = self.lovasz_loss(F.softmax(data_dict['logits'], dim=1), data_dict['labels'].long())
-        loss_main = loss_main_ce + loss_main_lovasz * self.lambda_lovasz
-        data_dict['loss_main_ce'] = loss_main_ce
-        data_dict['loss_main_lovasz'] = loss_main_lovasz
-        data_dict['loss'] += loss_main
+        data_dict['loss_main_ce'] = self.ce_loss(data_dict['logits'], data_dict['labels'].long())
+        data_dict['loss_main_lovasz'] = self.lovasz_loss(F.softmax(data_dict['logits'], dim=1),
+                                                         data_dict['labels'].long()) * self.lambda_lovasz
+        data_dict['loss'] = data_dict['loss_main_ce'] + data_dict['loss_main_lovasz']
 
         return data_dict

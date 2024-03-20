@@ -4,7 +4,7 @@ import yaml
 import numpy as np
 import pytorch_lightning as pl
 from datetime import datetime
-from pytorch_lightning.metrics import Accuracy
+from torchmetrics import Accuracy
 from torch.optim.lr_scheduler import ReduceLROnPlateau, StepLR, CosineAnnealingLR
 
 from utils.metric_util import IoU
@@ -16,6 +16,7 @@ class LightningBaseModel(pl.LightningModule):
         super().__init__()
         self.args = args
         self.train_acc = Accuracy()
+        self.train_acc_2d = Accuracy()
         self.val_acc = Accuracy(compute_on_step=False)
         self.val_iou = IoU(self.args['dataset_params'], compute_on_step=False)
 
@@ -27,12 +28,15 @@ class LightningBaseModel(pl.LightningModule):
 
         self.ignore_label = self.args['dataset_params']['ignore_label']
 
+        self.timer = None
+        self.save = False
+
     def configure_optimizers(self):
         if self.args['train_params']['optimizer'] == 'Adam':
-            optimizer = torch.optim.Adam(self.parameters(),
+            optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, self.parameters()),
                                          lr=self.args['train_params']["learning_rate"])
         elif self.args['train_params']['optimizer'] == 'SGD':
-            optimizer = torch.optim.SGD(self.parameters(),
+            optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, self.parameters()),
                                         lr=self.args['train_params']["learning_rate"],
                                         momentum=self.args['train_params']["momentum"],
                                         weight_decay=self.args['train_params']["weight_decay"],
@@ -95,41 +99,37 @@ class LightningBaseModel(pl.LightningModule):
         self.train_acc(data_dict['logits'].argmax(1)[data_dict['labels'] != self.ignore_label],
                        data_dict['labels'][data_dict['labels'] != self.ignore_label])
         self.log('train/acc', self.train_acc, on_epoch=True)
+        self.log('train/loss', data_dict['loss'])
         self.log('train/loss_main_ce', data_dict['loss_main_ce'])
         self.log('train/loss_main_lovasz', data_dict['loss_main_lovasz'])
+
+        if not self.baseline_only:
+            if 'img_pseudo_label' in data_dict:
+                img_label = data_dict['img_pseudo_label'].reshape(-1)
+            else:
+                img_label = data_dict['img_label']
+
+            self.train_acc_2d(data_dict['logits_2d'].argmax(1)[img_label != self.ignore_label],
+                              img_label[img_label != self.ignore_label])
+            self.log('train/acc_2d', self.train_acc_2d, on_epoch=True)
+            for scale in self.args['model_params']['scale_list']:
+                self.log('train/loss_3d_scale{}'.format(scale), data_dict['loss_3d_scale{}'.format(scale)])
+                self.log('train/loss_2d_scale{}'.format(scale), data_dict['loss_2d_scale{}'.format(scale)])
+                self.log('train/loss_xm_scale{}'.format(scale), data_dict['loss_xm_scale{}'.format(scale)])
+            self.log('train/loss_2d_multiscale', data_dict['loss_2d_multiscale'])
+            if self.args['model_params']['image_encoder'].get('peft', False) == 'adalora':
+                self.log('train/loss_2d_orth_regu', data_dict['loss_2d_orth_regu'])
 
         return data_dict['loss']
 
     def validation_step(self, data_dict, batch_idx):
-        indices = data_dict['indices']
-        raw_labels = data_dict['raw_labels'].squeeze(1).cpu()
-        origin_len = data_dict['origin_len']
-        vote_logits = torch.zeros((len(raw_labels), self.num_classes))
         data_dict = self.forward(data_dict)
-
-        if self.args['test']:
-            vote_logits.index_add_(0, indices.cpu(), data_dict['logits'].cpu())
-            if self.args['dataset_params']['pc_dataset_type'] == 'SemanticKITTI_multiscan':
-                vote_logits = vote_logits[:origin_len]
-                raw_labels = raw_labels[:origin_len]
-        else:
-            vote_logits = data_dict['logits'].cpu()
-            raw_labels = data_dict['labels'].squeeze(0).cpu()
-
-        prediction = vote_logits.argmax(1)
-
-        if self.ignore_label != 0:
-            prediction = prediction[raw_labels != self.ignore_label]
-            raw_labels = raw_labels[raw_labels != self.ignore_label]
-            prediction += 1
-            raw_labels += 1
+        prediction = data_dict['logits'].cpu().argmax(1)
+        raw_labels = data_dict['labels'].squeeze(0).cpu()
 
         self.val_acc(prediction, raw_labels)
         self.log('val/acc', self.val_acc, on_epoch=True)
-        self.val_iou(
-            prediction.cpu().detach().numpy(),
-            raw_labels.cpu().detach().numpy(),
-        )
+        self.val_iou(prediction.detach().numpy(), raw_labels.detach().numpy())
 
         return data_dict['loss']
 
@@ -140,7 +140,19 @@ class LightningBaseModel(pl.LightningModule):
         path = data_dict['path'][0]
 
         vote_logits = torch.zeros((len(raw_labels), self.num_classes))
-        data_dict = self.forward(data_dict)
+
+        if self.timer is not None:
+            import time
+            torch.cuda.synchronize()
+            start = time.time()
+            data_dict = self.forward(data_dict)
+            torch.cuda.synchronize()
+            end = time.time()
+            self.timer += end - start
+            print(self.timer)
+        else:
+            data_dict = self.forward(data_dict)
+
         vote_logits.index_add_(0, indices.cpu(), data_dict['logits'].cpu())
 
         if self.args['dataset_params']['pc_dataset_type'] == 'SemanticKITTI_multiscan':
@@ -149,19 +161,25 @@ class LightningBaseModel(pl.LightningModule):
 
         prediction = vote_logits.argmax(1)
 
-        if self.ignore_label != 0:
-            prediction = prediction[raw_labels != self.ignore_label]
-            raw_labels = raw_labels[raw_labels != self.ignore_label]
-            prediction += 1
-            raw_labels += 1
-
         if not self.args['submit_to_server']:
             self.val_acc(prediction, raw_labels)
             self.log('val/acc', self.val_acc, on_epoch=True)
-            self.val_iou(
-                prediction.cpu().detach().numpy(),
-                raw_labels.cpu().detach().numpy(),
-            )
+            self.val_iou(prediction.cpu().detach().numpy(), raw_labels.cpu().detach().numpy())
+
+            if self.save:
+                from utils.helper_ply import write_ply
+                a = Accuracy()
+                acc = int(a(prediction, raw_labels).item() * 100)
+                if acc < 90:
+                    os.makedirs('logs/vis/2dpass', exist_ok=True)
+                    path = data_dict['path'][0].replace('dataset/sequences',
+                                                        '2DPASS-main/logs/vis/2dpass').replace('/velodyne/',
+                                                                                               '_').replace(
+                        '.bin', '_{}.ply'.format(acc))
+                    write_ply(path, [data_dict['ref_xyz'].cpu().detach().numpy(), (
+                            data_dict['logits'].argmax(1) != data_dict['labels']).cpu().detach().numpy().astype(
+                        'int32')], ['x', 'y', 'z', 'error'])
+
         else:
             components = path.split('/')
             sequence = components[-3]
@@ -185,11 +203,10 @@ class LightningBaseModel(pl.LightningModule):
     def validation_epoch_end(self, outputs):
         iou, best_miou = self.val_iou.compute()
         mIoU = np.nanmean(iou)
-        str_print = ''
         self.log('val/mIoU', mIoU, on_epoch=True)
         self.log('val/best_miou', best_miou, on_epoch=True)
-        str_print += 'Validation per class iou: '
 
+        str_print = 'Validation per class iou: '
         for class_name, class_iou in zip(self.val_iou.unique_label_str, iou):
             str_print += '\n%s : %.2f%%' % (class_name, class_iou * 100)
 
@@ -197,14 +214,16 @@ class LightningBaseModel(pl.LightningModule):
         self.print(str_print)
 
     def test_epoch_end(self, outputs):
+        if self.timer is not None:
+            self.print("inference time:", self.timer)
+
         if not self.args['submit_to_server']:
             iou, best_miou = self.val_iou.compute()
             mIoU = np.nanmean(iou)
-            str_print = ''
             self.log('val/mIoU', mIoU, on_epoch=True)
             self.log('val/best_miou', best_miou, on_epoch=True)
-            str_print += 'Validation per class iou: '
 
+            str_print = 'Validation per class iou: '
             for class_name, class_iou in zip(self.val_iou.unique_label_str, iou):
                 str_print += '\n%s : %.2f%%' % (class_name, class_iou * 100)
 
@@ -225,3 +244,7 @@ class LightningBaseModel(pl.LightningModule):
         if not valid_gradients:
             print(f'detected inf or nan values in gradients. not updating model parameters')
             self.zero_grad()
+
+        if self.args['model_params']['backbone_2d'] != 'resnet34':
+            if self.args['model_params']['image_encoder']['peft'] == 'adalora':
+                self.rankallocator.update_and_mask(self.model_2d, self.global_step)
