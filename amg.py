@@ -39,6 +39,11 @@ parser.add_argument(
     default='config/SAMPLG-semantickitti.yaml'
 )
 
+parser.add_argument(
+    '--dirname',
+    default='procssed_sk'
+)
+
 amg_settings = parser.add_argument_group("AMG Settings")
 
 amg_settings.add_argument(
@@ -177,7 +182,7 @@ def main(args: argparse.Namespace) -> None:
         img_label = data_dict['img_label'][0]  # (PI, 1) in range(NC)
         instance_label = data_dict['instance_label'][0]  # (PI, 1) in range(NC)
         path = data_dict['path'][0]
-        save_file = path.replace('sequences', 'processed_sk').replace('velodyne', 'image_2_labels').replace('.bin',
+        save_file = path.replace('sequences', config.dirname).replace('velodyne', 'image_2_labels').replace('.bin',
                                                                                                             '.npy')
         save_base = "/".join(save_file.split('/')[:-1])
         os.makedirs(save_base, exist_ok=True)

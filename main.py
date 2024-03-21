@@ -35,7 +35,7 @@ def parse_config():
     # general
     parser.add_argument('--gpu', type=int, nargs='+', default=(0,), help='specify gpu devices')
     parser.add_argument("--seed", default=0, type=int)
-    parser.add_argument('--config_path', default='config/2DPASS-semantickitti.yaml')
+    parser.add_argument('--config_path', default='config/ELiTe-semantickitti.yaml')
     # training
     parser.add_argument('--log_dir', type=str, default='default', help='log location')
     parser.add_argument('--monitor', type=str, default='val/mIoU', help='the maximum metric')
