@@ -76,7 +76,7 @@ class MaskData:
 
 
 def is_box_near_crop_edge(
-    boxes: torch.Tensor, crop_box: List[int], orig_box: List[int], atol: float = 20.0
+        boxes: torch.Tensor, crop_box: List[int], orig_box: List[int], atol: float = 20.0
 ) -> torch.Tensor:
     """Filter masks at the edge of a crop, but not at the edge of the original image."""
     crop_box_torch = torch.as_tensor(crop_box, dtype=torch.float, device=boxes.device)
@@ -101,7 +101,7 @@ def batch_iterator(batch_size: int, *args) -> Generator[List[Any], None, None]:
     ), "Batched iteration must have inputs of all the same size."
     n_batches = len(args[0]) // batch_size + int(len(args[0]) % batch_size != 0)
     for b in range(n_batches):
-        yield [arg[b * batch_size : (b + 1) * batch_size] for arg in args]
+        yield [arg[b * batch_size: (b + 1) * batch_size] for arg in args]
 
 
 def mask_to_rle_pytorch(tensor: torch.Tensor) -> List[Dict[str, Any]]:
@@ -142,7 +142,7 @@ def rle_to_mask(rle: Dict[str, Any]) -> np.ndarray:
     idx = 0
     parity = False
     for count in rle["counts"]:
-        mask[idx : idx + count] = parity
+        mask[idx: idx + count] = parity
         idx += count
         parity ^= True
     mask = mask.reshape(w, h)
@@ -154,7 +154,7 @@ def area_from_rle(rle: Dict[str, Any]) -> int:
 
 
 def calculate_stability_score(
-    masks: torch.Tensor, mask_threshold: float, threshold_offset: float
+        masks: torch.Tensor, mask_threshold: float, threshold_offset: float
 ) -> torch.Tensor:
     """
     Computes the stability score for a batch of masks. The stability
@@ -187,18 +187,18 @@ def build_point_grid(n_per_side: int) -> np.ndarray:
 
 
 def build_all_layer_point_grids(
-    n_per_side: int, n_layers: int, scale_per_layer: int
+        n_per_side: int, n_layers: int, scale_per_layer: int
 ) -> List[np.ndarray]:
     """Generates point grids for all crop layers."""
     points_by_layer = []
     for i in range(n_layers + 1):
-        n_points = int(n_per_side / (scale_per_layer**i))
+        n_points = int(n_per_side / (scale_per_layer ** i))
         points_by_layer.append(build_point_grid(n_points))
     return points_by_layer
 
 
 def generate_crop_boxes(
-    im_size: Tuple[int, ...], n_layers: int, overlap_ratio: float
+        im_size: Tuple[int, ...], n_layers: int, overlap_ratio: float
 ) -> Tuple[List[List[int]], List[int]]:
     """
     Generates a list of crop boxes of different sizes. Each layer
@@ -253,7 +253,7 @@ def uncrop_points(points: torch.Tensor, crop_box: List[int]) -> torch.Tensor:
 
 
 def uncrop_masks(
-    masks: torch.Tensor, crop_box: List[int], orig_h: int, orig_w: int
+        masks: torch.Tensor, crop_box: List[int], orig_h: int, orig_w: int
 ) -> torch.Tensor:
     x0, y0, x1, y1 = crop_box
     if x0 == 0 and y0 == 0 and x1 == orig_w and y1 == orig_h:
@@ -265,7 +265,7 @@ def uncrop_masks(
 
 
 def remove_small_regions(
-    mask: np.ndarray, area_thresh: float, mode: str
+        mask: np.ndarray, area_thresh: float, mode: str
 ) -> Tuple[np.ndarray, bool]:
     """
     Removes small disconnected regions and holes in a mask. Returns the
@@ -289,15 +289,6 @@ def remove_small_regions(
             fill_labels = [int(np.argmax(sizes)) + 1]
     mask = np.isin(regions, fill_labels)
     return mask, True
-
-
-def coco_encode_rle(uncompressed_rle: Dict[str, Any]) -> Dict[str, Any]:
-    from pycocotools import mask as mask_utils  # type: ignore
-
-    h, w = uncompressed_rle["size"]
-    rle = mask_utils.frPyObjects(uncompressed_rle, h, w)
-    rle["counts"] = rle["counts"].decode("utf-8")  # Necessary to serialize with json
-    return rle
 
 
 def batched_mask_to_box(masks: torch.Tensor) -> torch.Tensor:

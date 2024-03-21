@@ -20,7 +20,6 @@ from .utils.amg import (
     box_xyxy_to_xywh,
     build_all_layer_point_grids,
     calculate_stability_score,
-    coco_encode_rle,
     generate_crop_boxes,
     is_box_near_crop_edge,
     mask_to_rle_pytorch,
@@ -34,21 +33,20 @@ from .utils.amg import (
 
 class SamAutomaticMaskGenerator:
     def __init__(
-        self,
-        model: Sam,
-        points_per_side: Optional[int] = 32,
-        points_per_batch: int = 64,
-        pred_iou_thresh: float = 0.88,
-        stability_score_thresh: float = 0.95,
-        stability_score_offset: float = 1.0,
-        box_nms_thresh: float = 0.7,
-        crop_n_layers: int = 0,
-        crop_nms_thresh: float = 0.7,
-        crop_overlap_ratio: float = 512 / 1500,
-        crop_n_points_downscale_factor: int = 1,
-        point_grids: Optional[List[np.ndarray]] = None,
-        min_mask_region_area: int = 0,
-        output_mode: str = "binary_mask",
+            self,
+            model: Sam,
+            points_per_side: Optional[int] = 32,
+            points_per_batch: int = 64,
+            pred_iou_thresh: float = 0.88,
+            stability_score_thresh: float = 0.95,
+            stability_score_offset: float = 1.0,
+            box_nms_thresh: float = 0.7,
+            crop_n_layers: int = 0,
+            crop_nms_thresh: float = 0.7,
+            crop_overlap_ratio: float = 512 / 1500,
+            crop_n_points_downscale_factor: int = 1,
+            point_grids: Optional[List[np.ndarray]] = None,
+            min_mask_region_area: int = 0,
     ) -> None:
         """
         Using a SAM model, generates masks for the entire image.
@@ -89,14 +87,10 @@ class SamAutomaticMaskGenerator:
           min_mask_region_area (int): If >0, postprocessing will be applied
             to remove disconnected regions and holes in masks with area smaller
             than min_mask_region_area. Requires opencv.
-          output_mode (str): The form masks are returned in. Can be 'binary_mask',
-            'uncompressed_rle', or 'coco_rle'. 'coco_rle' requires pycocotools.
-            For large resolutions, 'binary_mask' may consume large amounts of
-            memory.
         """
 
         assert (points_per_side is None) != (
-            point_grids is None
+                point_grids is None
         ), "Exactly one of points_per_side or point_grid must be provided."
         if points_per_side is not None:
             self.point_grids = build_all_layer_point_grids(
@@ -108,14 +102,6 @@ class SamAutomaticMaskGenerator:
             self.point_grids = point_grids
         else:
             raise ValueError("Can't have both points_per_side and point_grid be None.")
-
-        assert output_mode in [
-            "binary_mask",
-            "uncompressed_rle",
-            "coco_rle",
-        ], f"Unknown output_mode {output_mode}."
-        if output_mode == "coco_rle":
-            from pycocotools import mask as mask_utils  # type: ignore # noqa: F401
 
         if min_mask_region_area > 0:
             import cv2  # type: ignore # noqa: F401
@@ -131,7 +117,6 @@ class SamAutomaticMaskGenerator:
         self.crop_overlap_ratio = crop_overlap_ratio
         self.crop_n_points_downscale_factor = crop_n_points_downscale_factor
         self.min_mask_region_area = min_mask_region_area
-        self.output_mode = output_mode
 
     @torch.no_grad()
     def generate(self, image: np.ndarray) -> List[Dict[str, Any]]:
@@ -144,9 +129,7 @@ class SamAutomaticMaskGenerator:
         Returns:
            list(dict(str, any)): A list over records for masks. Each record is
              a dict containing the following keys:
-               segmentation (dict(str, any) or np.ndarray): The mask. If
-                 output_mode='binary_mask', is an array of shape HW. Otherwise,
-                 is a dictionary containing the RLE.
+               segmentation (dict(str, any) or np.ndarray): The mask is an array of shape HW.
                bbox (list(float)): The box around the mask, in XYWH format.
                area (int): The area in pixels of the mask.
                predicted_iou (float): The model's own prediction of the mask's
@@ -171,12 +154,7 @@ class SamAutomaticMaskGenerator:
             )
 
         # Encode masks
-        if self.output_mode == "coco_rle":
-            mask_data["segmentations"] = [coco_encode_rle(rle) for rle in mask_data["rles"]]
-        elif self.output_mode == "binary_mask":
-            mask_data["segmentations"] = [rle_to_mask(rle) for rle in mask_data["rles"]]
-        else:
-            mask_data["segmentations"] = mask_data["rles"]
+        mask_data["segmentations"] = [rle_to_mask(rle) for rle in mask_data["rles"]]
 
         # Write mask records
         curr_anns = []
@@ -223,11 +201,11 @@ class SamAutomaticMaskGenerator:
         return data
 
     def _process_crop(
-        self,
-        image: np.ndarray,
-        crop_box: List[int],
-        crop_layer_idx: int,
-        orig_size: Tuple[int, ...],
+            self,
+            image: np.ndarray,
+            crop_box: List[int],
+            crop_layer_idx: int,
+            orig_size: Tuple[int, ...],
     ) -> MaskData:
         # Crop the image and calculate embeddings
         x0, y0, x1, y1 = crop_box
@@ -264,11 +242,11 @@ class SamAutomaticMaskGenerator:
         return data
 
     def _process_batch(
-        self,
-        points: np.ndarray,
-        im_size: Tuple[int, ...],
-        crop_box: List[int],
-        orig_size: Tuple[int, ...],
+            self,
+            points: np.ndarray,
+            im_size: Tuple[int, ...],
+            crop_box: List[int],
+            orig_size: Tuple[int, ...],
     ) -> MaskData:
         orig_h, orig_w = orig_size
 
@@ -322,7 +300,7 @@ class SamAutomaticMaskGenerator:
 
     @staticmethod
     def postprocess_small_regions(
-        mask_data: MaskData, min_area: int, nms_thresh: float
+            mask_data: MaskData, min_area: int, nms_thresh: float
     ) -> MaskData:
         """
         Removes small disconnected regions and holes in masks, then reruns
